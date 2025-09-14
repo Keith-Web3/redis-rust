@@ -14,7 +14,13 @@ fn main() {
         match stream {
             Ok(mut stream_result) => {
                 println!("accepted new connection");
-                stream_result.write_all(b"+PONG\r\n").unwrap();
+                loop {
+                    println!("attempting to respond");
+                    match stream_result.write_all(b"+PONG\r\n") {
+                        Ok(_) => println!("responded successfully"),
+                        Err(_) => println!("response failed")
+                    }
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
