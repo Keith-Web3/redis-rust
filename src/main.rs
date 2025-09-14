@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 use std::net::TcpListener;
+use std::thread;
 use std::io::{Write, Read};
 
 fn main() {
@@ -9,34 +10,43 @@ fn main() {
     // Uncomment this block to pass the first stage
     //
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let mut handlers = vec![];
     
     for stream in listener.incoming() {
-        let mut buffer = [0; 1024]; // A buffer to store incoming data   
+        let handler = thread::spawn(move || {
+            let mut buffer = [0; 1024]; // A buffer to store incoming data   
+    
+            match stream {
+                Ok(mut stream_result) => {
+                    println!("accepted new connection");
+                    loop {
+                        let data = stream_result.read(&mut buffer);
+                        println!("attempting to respond");
+                        match data{
+                            Ok (0) => {
+                                break;
+                            }
+                            Ok(_) => {
+                                println!("responded successfully");
+                                stream_result.write_all(b"+PONG\r\n").unwrap();
 
-        match stream {
-            Ok(mut stream_result) => {
-                println!("accepted new connection");
-                loop {
-                    let data = stream_result.read(&mut buffer);
-                    println!("attempting to respond");
-                    match data{
-                        Ok (0) => {
-                            break;
-                        }
-                        Ok(_) => {
-                            println!("responded successfully");
-                            stream_result.write_all(b"+PONG\r\n").unwrap();
-                        },
-                        Err(_) => {
-                            println!("response failed");
-                            break;
+                            },
+                            Err(_) => {
+                                println!("response failed");
+                                break;
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    println!("error: {}", e);
+                }
             }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+        });
+        handlers.push(handler);
+    }
+
+    for handler in handlers {
+        handler.join().unwrap();
     }
 }
