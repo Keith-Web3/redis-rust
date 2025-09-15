@@ -1,11 +1,12 @@
 #![allow(unused_imports)]
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
 use regex::Regex;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum RedisData {
     String(String),
     Int(isize),
@@ -29,6 +30,7 @@ fn main() {
     for stream in listener.incoming() {
         let handler = thread::spawn(move || {
             let mut buffer = [0; 1024]; // A buffer to store incoming data
+            let mut redis_dictionary = HashMap::new();
 
             match stream {
                 Ok(mut stream_result) => loop {
@@ -55,7 +57,7 @@ fn main() {
                                 }
                                 RedisData::Array(val) => {
                                     if let RedisData::BulkString(cmd) = &val[0] {
-                                        if cmd == &String::from("echo") {
+                                        if cmd == "echo" {
                                             if let RedisData::BulkString(arg) = &val[1] {
                                                 stream_result
                                                     .write_all(
@@ -66,8 +68,53 @@ fn main() {
                                             } else {
                                                 println!("Invalid argument");
                                             }
-                                        } else if cmd == &String::from("ping") {
+                                        } else if cmd == "ping" {
                                             stream_result.write_all(b"+PONG\r\n").unwrap()
+                                        } else if cmd == "set" {
+                                            if let (
+                                                RedisData::BulkString(key),
+                                                RedisData::BulkString(value),
+                                            ) = (val[1].clone(), val[2].clone())
+                                            {
+                                                redis_dictionary.insert(key, value);
+                                                stream_result
+                                                    .write_all(
+                                                        redis_serialize(&RedisData::String(
+                                                            String::from("OK"),
+                                                        ))
+                                                        .as_bytes(),
+                                                    )
+                                                    .unwrap();
+                                            } else {
+                                                println!("Invalid key value pair");
+                                            }
+                                        } else if cmd == "get" {
+                                            if let RedisData::BulkString(key) = &val[1] {
+                                                println!("key: {}", key);
+                                                let value = redis_dictionary.get(key);
+                                                match value {
+                                                    Some(val) => {
+                                                        println!("value from redis dictionary: {}", val);
+                                                        let data =
+                                                            RedisData::BulkString(val.to_string());
+                                                        stream_result
+                                                            .write_all(
+                                                                redis_serialize(&data).as_bytes(),
+                                                            )
+                                                            .unwrap();
+                                                    }
+                                                    None => {
+                                                        let data = RedisData::NullBulkString(());
+                                                        stream_result
+                                                            .write_all(
+                                                                redis_serialize(&data).as_bytes(),
+                                                            )
+                                                            .unwrap();
+                                                    }
+                                                }
+                                            } else {
+                                                println!("Invalid key");
+                                            }
                                         } else {
                                             print!("Invalid command");
                                         }
@@ -151,7 +198,6 @@ fn redis_parse(command: String) -> RedisData {
             .split("\r\n")
             .filter(|cmd| !cmd.is_empty())
             .for_each(|cmd| {
-                println!("command: {}", cmd);
                 if index == 0 {
                     match cmd[1..].parse::<usize>() {
                         Ok(val) => length = val,
@@ -178,4 +224,22 @@ fn redis_parse(command: String) -> RedisData {
         return RedisData::Array(final_arr);
     }
     RedisData::Null(())
+}
+
+fn redis_serialize(data: &RedisData) -> String {
+    let result = match data {
+        RedisData::String(val) => format!("+{}\r\n", val),
+        RedisData::Int(val) => format!(":{}\r\n", val),
+        RedisData::Error(val) => format!("-{}\r\n", val),
+        RedisData::BulkString(val) => format!("${}\r\n{}\r\n", val.len(), val),
+        RedisData::NullBulkString(_) => String::from("-1\r\n"),
+        RedisData::Null(_) => String::from("_\r\n"),
+        RedisData::Array(val) => {
+            let data = val.iter().map(|el| redis_serialize(el)).collect::<String>();
+
+            format!("*{}\r\n{}", val.len(), data)
+        }
+    };
+
+    result
 }
