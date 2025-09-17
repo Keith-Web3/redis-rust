@@ -4,18 +4,22 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use regex::Regex;
+mod redis;
+mod utils;
 
-#[derive(Debug, Clone)]
-enum RedisData {
-    String(String),
-    Int(isize),
-    Error(String),
-    BulkString(String),
-    NullBulkString(()),
-    Array(Vec<RedisData>),
-    Null(()),
-}
+use redis::parser::RedisData;
+use redis::utils::{redis_parse, redis_serialize};
+
+// trait Then {
+//     fn then<F: Fn(&Self)>(&self, closure: F) {
+//         match self {
+//             Ok(val) => closure(val)
+//         }
+//         ;
+//     }
+// }
+
+// impl<T, E> Then for Result<T, E> {}
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -44,83 +48,85 @@ fn main() {
                             let msg = String::from_utf8_lossy(&buffer[..data]).to_string();
                             let parsed_data = redis_parse(msg);
 
-                            match parsed_data {
-                                RedisData::String(val) => {
-                                    if val == String::from("ping") {
-                                        stream_result.write_all(b"+PONG\r\n").unwrap()
-                                    }
-                                }
-                                RedisData::BulkString(val) => {
-                                    if val == String::from("ping") {
-                                        stream_result.write_all(b"+PONG\r\n").unwrap()
-                                    }
-                                }
-                                RedisData::Array(val) => {
-                                    if let RedisData::BulkString(cmd) = &val[0] {
-                                        if cmd == "echo" {
-                                            if let RedisData::BulkString(arg) = &val[1] {
-                                                stream_result
-                                                    .write_all(
-                                                        format!("${}\r\n{}\r\n", arg.len(), arg)
-                                                            .as_bytes(),
-                                                    )
-                                                    .unwrap();
-                                            } else {
-                                                println!("Invalid argument");
-                                            }
-                                        } else if cmd == "ping" {
-                                            stream_result.write_all(b"+PONG\r\n").unwrap()
-                                        } else if cmd == "set" {
-                                            if let (
-                                                RedisData::BulkString(key),
-                                                RedisData::BulkString(value),
-                                            ) = (val[1].clone(), val[2].clone())
-                                            {
+                            if parsed_data.is_string(Some("ping"))
+                                || parsed_data.is_bulk_string(Some("ping"))
+                            {
+                                utils::then(
+                                    stream_result.write_all(b"+PONG\r\n"),
+                                    |()| {},
+                                    "Error responding to ping",
+                                );
+                            }
+
+                            if parsed_data.is_arr() {
+                                utils::then(
+                                    parsed_data.as_arr(),
+                                    |arr| {
+                                        if arr[0].parses_to_string(Some("ping")) {
+                                            utils::then(
+                                                stream_result.write_all(b"+PONG\r\n"),
+                                                |()| {},
+                                                "Error responding to ping",
+                                            );
+                                        } else if arr.len() >= 2 {
+                                            if arr[0].is_bulk_string(Some("echo")) {
+                                                utils::then(
+                                                    arr[1].as_string(),
+                                                    |arg| {
+                                                        utils::then(
+                                                            stream_result.write_all(
+                                                                redis_serialize(
+                                                                    &RedisData::BulkString(arg),
+                                                                )
+                                                                .as_bytes(),
+                                                            ),
+                                                            |()| {},
+                                                            "Error responding to echo",
+                                                        )
+                                                    },
+                                                    "Error converting Redis Data to string",
+                                                );
+                                            } else if arr[0].is_bulk_string(Some("set")) {
+                                                let key =
+                                                    arr[1].as_string().unwrap_or(String::from(""));
+                                                let value =
+                                                    arr[2].as_string().unwrap_or(String::from(""));
+
                                                 redis_dictionary.insert(key, value);
-                                                stream_result
-                                                    .write_all(
-                                                        redis_serialize(&RedisData::String(
-                                                            String::from("OK"),
-                                                        ))
-                                                        .as_bytes(),
-                                                    )
-                                                    .unwrap();
-                                            } else {
-                                                println!("Invalid key value pair");
-                                            }
-                                        } else if cmd == "get" {
-                                            if let RedisData::BulkString(key) = &val[1] {
-                                                println!("key: {}", key);
-                                                let value = redis_dictionary.get(key);
-                                                match value {
-                                                    Some(val) => {
-                                                        println!("value from redis dictionary: {}", val);
-                                                        let data =
-                                                            RedisData::BulkString(val.to_string());
-                                                        stream_result
-                                                            .write_all(
+
+                                                utils::then(
+                                                    stream_result.write_all(b"+OK\r\n"),
+                                                    |()| {},
+                                                    "Error setting key",
+                                                );
+                                            } else if arr[0].is_bulk_string(Some("get")) {
+                                                utils::then(
+                                                    arr[1].as_string(),
+                                                    |key| {
+                                                        let value = redis_dictionary.get(&key);
+                                                        let data = match value {
+                                                            Some(val) => RedisData::BulkString(
+                                                                val.to_string(),
+                                                            ),
+
+                                                            None => RedisData::NullBulkString(()),
+                                                        };
+
+                                                        utils::then(
+                                                            stream_result.write_all(
                                                                 redis_serialize(&data).as_bytes(),
-                                                            )
-                                                            .unwrap();
-                                                    }
-                                                    None => {
-                                                        let data = RedisData::NullBulkString(());
-                                                        stream_result
-                                                            .write_all(
-                                                                redis_serialize(&data).as_bytes(),
-                                                            )
-                                                            .unwrap();
-                                                    }
-                                                }
-                                            } else {
-                                                println!("Invalid key");
+                                                            ),
+                                                            |()| {},
+                                                            "Error Responding to get",
+                                                        );
+                                                    },
+                                                    "Error converting Redis Data to string",
+                                                );
                                             }
-                                        } else {
-                                            print!("Invalid command");
                                         }
-                                    };
-                                }
-                                _ => println!("type not handled"),
+                                    },
+                                    "Error converting RedisData to vector",
+                                )
                             }
                         }
                         Err(_) => {
@@ -140,106 +146,4 @@ fn main() {
     for handler in handlers {
         handler.join().unwrap();
     }
-}
-
-fn redis_parse(command: String) -> RedisData {
-    if command.starts_with("+") {
-        return RedisData::String(command[1..].to_lowercase().split("\r\n").collect());
-    } else if command.starts_with("-") {
-        return RedisData::Error(command[1..].to_lowercase().split("\r\n").collect());
-    } else if command.starts_with(":") {
-        let cmd_string = command[1..].split("\r\n").collect::<String>();
-        let int_value = cmd_string.parse::<isize>();
-
-        match int_value {
-            Ok(val) => return RedisData::Int(val),
-            Err(_) => println!("Invalid integer"),
-        }
-    } else if command.starts_with("$") {
-        let bulk_string_regex = Regex::new(r"^\$([0-9]+)\r\n(.+)\r\n$");
-
-        match bulk_string_regex {
-            Ok(re) => {
-                if let Some(bulk_string) = re.captures(&command) {
-                    let (_, [length, value]) = bulk_string.extract();
-
-                    let parsed_length = length.parse::<usize>().unwrap_or(0);
-                    if parsed_length != value.len() {
-                        println!("Invalid bulk string, mismatching lengths")
-                    } else {
-                        return RedisData::BulkString(value.to_lowercase());
-                    }
-                } else {
-                    println!("Invalid bulk string, invalid pattern");
-                }
-            }
-            Err(_) => {
-                println!("Invalid bulk regex");
-            }
-        }
-
-        let null_bulk_regex = Regex::new(r"^\$-1\r\n$");
-
-        match null_bulk_regex {
-            Ok(re) => {
-                if re.is_match(&command) {
-                    return RedisData::NullBulkString(());
-                }
-            }
-            Err(_) => {}
-        }
-    } else if command.starts_with("*") {
-        let mut prev_value = "";
-        let mut recombined = vec![];
-        let mut index = 0;
-        let mut length: usize = 0;
-
-        command
-            .split("\r\n")
-            .filter(|cmd| !cmd.is_empty())
-            .for_each(|cmd| {
-                if index == 0 {
-                    match cmd[1..].parse::<usize>() {
-                        Ok(val) => length = val,
-                        Err(_) => {
-                            println!("length is invalid");
-                            return;
-                        }
-                    }
-                } else if prev_value.starts_with("$") {
-                    recombined.push(format!("{}\r\n{}\r\n", prev_value, cmd))
-                } else if !cmd.starts_with("$") {
-                    recombined.push(format!("{}\r\n", cmd));
-                }
-                prev_value = cmd;
-                index += 1;
-            });
-
-        println!("recombined: {:?}", recombined);
-        let final_arr = recombined
-            .into_iter()
-            .map(|cmd| redis_parse(cmd))
-            .collect::<Vec<RedisData>>();
-
-        return RedisData::Array(final_arr);
-    }
-    RedisData::Null(())
-}
-
-fn redis_serialize(data: &RedisData) -> String {
-    let result = match data {
-        RedisData::String(val) => format!("+{}\r\n", val),
-        RedisData::Int(val) => format!(":{}\r\n", val),
-        RedisData::Error(val) => format!("-{}\r\n", val),
-        RedisData::BulkString(val) => format!("${}\r\n{}\r\n", val.len(), val),
-        RedisData::NullBulkString(_) => String::from("-1\r\n"),
-        RedisData::Null(_) => String::from("_\r\n"),
-        RedisData::Array(val) => {
-            let data = val.iter().map(|el| redis_serialize(el)).collect::<String>();
-
-            format!("*{}\r\n{}", val.len(), data)
-        }
-    };
-
-    result
 }
