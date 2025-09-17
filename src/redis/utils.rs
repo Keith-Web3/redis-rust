@@ -92,7 +92,7 @@ pub fn redis_serialize(data: &RedisData) -> String {
         RedisData::Int(val) => format!(":{}\r\n", val),
         RedisData::Error(val) => format!("-{}\r\n", val),
         RedisData::BulkString(val) => format!("${}\r\n{}\r\n", val.len(), val),
-        RedisData::NullBulkString(_) => String::from("-1\r\n"),
+        RedisData::NullBulkString(_) => String::from("$-1\r\n"),
         RedisData::Null(_) => String::from("_\r\n"),
         RedisData::Array(val) => {
             let data = val.iter().map(|el| redis_serialize(el)).collect::<String>();

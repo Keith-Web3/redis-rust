@@ -1,8 +1,11 @@
 #![allow(unused_imports)]
 use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt::Binary;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, SystemTime};
 
 mod redis;
 mod utils;
@@ -48,8 +51,7 @@ fn main() {
                             let msg = String::from_utf8_lossy(&buffer[..data]).to_string();
                             let parsed_data = redis_parse(msg);
 
-                            if parsed_data.is_string(Some("ping"))
-                                || parsed_data.is_bulk_string(Some("ping"))
+                            if parsed_data.parses_to_string(Some("ping"))
                             {
                                 utils::then(
                                     stream_result.write_all(b"+PONG\r\n"),
@@ -91,8 +93,23 @@ fn main() {
                                                     arr[1].as_string().unwrap_or(String::from(""));
                                                 let value =
                                                     arr[2].as_string().unwrap_or(String::from(""));
+                                                let can_expire = arr.len() >= 5 && arr[3].parses_to_string(Some("px"));
 
-                                                redis_dictionary.insert(key, value);
+                                                if can_expire {
+                                                    let expiry = arr[4].as_string().unwrap_or(String::from("0"));
+
+                                                    redis_dictionary.insert(
+                                                        key,
+                                                        (
+                                                            value,
+                                                            Some(SystemTime::now()),
+                                                            Some(expiry.clone()),
+                                                        ),
+                                                    );
+                                                } else {
+                                                    redis_dictionary
+                                                        .insert(key, (value, None, None));
+                                                };
 
                                                 utils::then(
                                                     stream_result.write_all(b"+OK\r\n"),
@@ -105,13 +122,35 @@ fn main() {
                                                     |key| {
                                                         let value = redis_dictionary.get(&key);
                                                         let data = match value {
-                                                            Some(val) => RedisData::BulkString(
-                                                                val.to_string(),
-                                                            ),
+                                                            Some(val) => {
+                                                                let (value, time_stored, expiry) =
+                                                                    val;
+
+                                                                    println!("val: {:?}", val);
+                                                                if let Some(expired_at) = expiry {
+                                                                    match time_stored.unwrap().elapsed() {
+                                                                        Ok(time) => { 
+                                                                            if time.as_millis() >= expired_at.parse::<u128>().unwrap() {
+                                                                                RedisData::NullBulkString(())
+                                                                            } else {
+                                                                                 RedisData::BulkString(
+                                                                value.to_string()
+                                                            )
+                                                                            }
+                                                                        },
+                                                                        _ => RedisData::NullBulkString(())
+                                                                    }
+                                                                } else {
+                                                                    RedisData::BulkString(
+                                                                        value.to_string(),
+                                                                    )
+                                                                }
+                                                            }
 
                                                             None => RedisData::NullBulkString(()),
                                                         };
 
+                                                        println!("response: {}", redis_serialize(&data));
                                                         utils::then(
                                                             stream_result.write_all(
                                                                 redis_serialize(&data).as_bytes(),
