@@ -5,6 +5,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::redis::parser::RedisData;
+
 use super::{redis_parse, response::respond};
 
 pub struct StoreItem {
@@ -15,6 +17,8 @@ pub struct StoreItem {
 
 pub fn handle_connection(mut connection: TcpStream) {
     let mut store = HashMap::<String, StoreItem>::new();
+    let mut list_store = HashMap::<String, Vec<String>>::new();
+
     let mut buffer = [0; 1000];
 
     loop {
@@ -28,7 +32,7 @@ pub fn handle_connection(mut connection: TcpStream) {
                 let data = String::from_utf8_lossy(&buffer[..byte_count]).to_string();
                 let parsed_data = redis_parse(data);
 
-                let response = respond(parsed_data, &mut store);
+                let response = respond(parsed_data, &mut store, &mut list_store);
 
                 let final_response = connection.write_all(response.as_bytes());
 

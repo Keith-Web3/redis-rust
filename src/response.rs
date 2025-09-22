@@ -2,7 +2,11 @@ use std::{collections::HashMap, time::SystemTime};
 
 use super::{handler::StoreItem, redis_serialize, RedisData};
 
-pub fn respond(req: RedisData, store: &mut HashMap<String, StoreItem>) -> String {
+pub fn respond(
+    req: RedisData,
+    store: &mut HashMap<String, StoreItem>,
+    list_store: &mut HashMap<String, Vec<String>>,
+) -> String {
     if req.parses_to_string(Some("ping")) {
         return handle_ping();
     }
@@ -23,6 +27,8 @@ pub fn respond(req: RedisData, store: &mut HashMap<String, StoreItem>) -> String
                         return handle_set(data, store);
                     } else if cmd.is_bulk_string(Some("get")) {
                         return handle_get(data, store);
+                    } else if cmd.is_bulk_string(Some("rpush")) {
+                        return handle_rpush(data, list_store);
                     }
                 }
             }
@@ -84,7 +90,7 @@ fn handle_set(data: &Vec<RedisData>, store: &mut HashMap<String, StoreItem>) -> 
 }
 
 fn handle_get(data: &Vec<RedisData>, store: &mut HashMap<String, StoreItem>) -> String {
-    let key = data[1].as_string().unwrap_or(String::from("empty"));
+    let key = data[1].as_string().unwrap_or(String::from(""));
     let value = store.get(&key);
 
     let data = match value {
@@ -115,4 +121,29 @@ fn handle_get(data: &Vec<RedisData>, store: &mut HashMap<String, StoreItem>) -> 
     };
 
     return redis_serialize(&data);
+}
+
+fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<String>>) -> String {
+    if data.len() < 3 {
+        return redis_serialize(&RedisData::Error(String::from(
+            "Error setting key value pair",
+        )));
+    }
+
+    let key = data[1].as_string().unwrap_or(String::from(""));
+    let value = data[2..]
+        .iter()
+        .map(|val| val.as_string().unwrap_or(String::from("")));
+
+    let default = vec![];
+    let mut existing_list = list_store.get(&key).unwrap_or(&default).to_vec();
+
+    existing_list.extend(value);
+    let length = existing_list.len();
+
+    let new_list = existing_list;
+
+    list_store.insert(key, new_list);
+
+    return redis_serialize(&RedisData::Int(length.try_into().unwrap_or(0)));
 }
