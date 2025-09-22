@@ -22,3 +22,4 @@ set -e # Exit early if any commands fail
 # - Edit this to change how your program runs locally
 # - Edit .codecrafters/run.sh to change how your program runs remotely
 exec /tmp/codecrafters-build-redis-rust/release/codecrafters-redis "$@"
+redis-cli RPUSH List_key "element"
