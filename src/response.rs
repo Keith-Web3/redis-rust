@@ -5,7 +5,7 @@ use super::{handler::StoreItem, redis_serialize, RedisData};
 pub fn respond(
     req: RedisData,
     store: &mut HashMap<String, StoreItem>,
-    list_store: &mut HashMap<String, Vec<String>>,
+    list_store: &mut HashMap<String, Vec<RedisData>>,
 ) -> String {
     if req.parses_to_string(Some("ping")) {
         return handle_ping();
@@ -123,17 +123,15 @@ fn handle_get(data: &Vec<RedisData>, store: &mut HashMap<String, StoreItem>) -> 
     return redis_serialize(&data);
 }
 
-fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<String>>) -> String {
-    if data.len() < 3 {
+fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<RedisData>>) -> String {
+    if data.len() != 4 {
         return redis_serialize(&RedisData::Error(String::from(
-            "Error setting key value pair",
+            "Invalid number of arguments",
         )));
     }
 
     let key = data[1].as_string().unwrap_or(String::from(""));
-    let value = data[2..]
-        .iter()
-        .map(|val| val.as_string().unwrap_or(String::from("")));
+    let value = data[2..].to_vec();
 
     let default = vec![];
     let mut existing_list = list_store.get(&key).unwrap_or(&default).to_vec();
@@ -146,4 +144,8 @@ fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<Stri
     list_store.insert(key, new_list);
 
     return redis_serialize(&RedisData::Int(length.try_into().unwrap_or(0)));
+}
+
+fn handle_lrange(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<String>>) {
+
 }

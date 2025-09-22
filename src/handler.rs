@@ -17,7 +17,7 @@ pub struct StoreItem {
 
 pub fn handle_connection(mut connection: TcpStream) {
     let mut store = HashMap::<String, StoreItem>::new();
-    let mut list_store = HashMap::<String, Vec<String>>::new();
+    let mut list_store = HashMap::<String, Vec<RedisData>>::new();
 
     let mut buffer = [0; 1000];
 
