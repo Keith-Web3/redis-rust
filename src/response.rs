@@ -29,6 +29,8 @@ pub fn respond(
                         return handle_get(data, store);
                     } else if cmd.is_bulk_string(Some("rpush")) {
                         return handle_rpush(data, list_store);
+                    } else if cmd.is_bulk_string(Some("lrange")) {
+                        return handle_lrange(data, list_store);
                     }
                 }
             }
@@ -124,7 +126,7 @@ fn handle_get(data: &Vec<RedisData>, store: &mut HashMap<String, StoreItem>) -> 
 }
 
 fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<RedisData>>) -> String {
-    if data.len() != 4 {
+    if data.len() < 4 {
         return redis_serialize(&RedisData::Error(String::from(
             "Invalid number of arguments",
         )));
@@ -146,6 +148,61 @@ fn handle_rpush(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<Redi
     return redis_serialize(&RedisData::Int(length.try_into().unwrap_or(0)));
 }
 
-fn handle_lrange(data: &Vec<RedisData>, list_store: &mut HashMap<String, Vec<String>>) {
+fn handle_lrange(
+    data: &Vec<RedisData>,
+    list_store: &mut HashMap<String, Vec<RedisData>>,
+) -> String {
+    if data.len() != 4 {
+        return redis_serialize(&RedisData::Error(String::from(
+            "Invalid number of arguments",
+        )));
+    }
 
+    let key = data[1].as_string().unwrap_or(String::from(""));
+    let parsed_start_index = data[2].as_int().unwrap_or(&0);
+    let parsed_stop_index = data[3].as_int().unwrap_or(&0);
+
+    let default = vec![];
+
+    let existing_list = list_store.get(&key).unwrap_or(&default);
+    let list_length = existing_list.len();
+
+    let unsigned_start = parsed_start_index.unsigned_abs();
+    let unsigned_end = parsed_stop_index.unsigned_abs();
+
+    let start_index = if parsed_start_index.is_positive() {
+        if unsigned_start >= list_length {
+            list_length - 1
+        } else {
+            unsigned_start
+        }
+    } else {
+        if unsigned_start >= list_length {
+            0
+        } else {
+            list_length - unsigned_start
+        }
+    };
+
+    let stop_index = if parsed_stop_index.is_positive() {
+        if unsigned_end >= list_length {
+            list_length - 1
+        } else {
+            unsigned_end
+        }
+    } else {
+        if unsigned_end >= list_length {
+            0
+        } else {
+            list_length - unsigned_end
+        }
+    };
+
+    if existing_list.is_empty() || start_index >= existing_list.len() || start_index > stop_index {
+        return redis_serialize(&RedisData::Array(vec![]));
+    }
+
+    let slice = &existing_list[start_index..stop_index + 1];
+
+    return redis_serialize(&RedisData::Array(slice.to_vec()));
 }
